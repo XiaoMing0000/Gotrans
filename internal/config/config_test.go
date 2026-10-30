@@ -5,7 +5,16 @@ import "testing"
 func TestSaveLoadRoundTrip(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	want := Config{SelectionEnabled: false, ShowSelectionSource: false, WindowOpacity: 0.42, FontOpacity: 0.7}
+	want := Config{
+		SelectionEnabled:    false,
+		ShowSelectionSource: false,
+		WindowOpacity:       0.42,
+		FontOpacity:         0.7,
+		Provider:            "google",
+		GoogleAPIKey:        "AIza-test-key",
+		GoogleAPIBaseURL:    "https://translate.example.com/language/translate/v2",
+		APIBaseURL:          "https://mirror.example.com",
+	}
 	if err := want.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -14,7 +23,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.SelectionEnabled != want.SelectionEnabled || got.ShowSelectionSource != want.ShowSelectionSource ||
-		got.WindowOpacity != want.WindowOpacity || got.FontOpacity != want.FontOpacity {
+		got.WindowOpacity != want.WindowOpacity || got.FontOpacity != want.FontOpacity ||
+		got.Provider != want.Provider || got.GoogleAPIKey != want.GoogleAPIKey ||
+		got.GoogleAPIBaseURL != want.GoogleAPIBaseURL || got.APIBaseURL != want.APIBaseURL {
 		t.Fatalf("Load = %+v, want %+v", got, want)
 	}
 }
@@ -27,7 +38,8 @@ func TestLoadDefaultsWhenMissing(t *testing.T) {
 		t.Fatal("期望首次加载返回错误（文件不存在）")
 	}
 	if got.SelectionEnabled != true || got.ShowSelectionSource != true ||
-		got.WindowOpacity != 1.0 || got.FontOpacity != 1.0 {
+		got.WindowOpacity != 1.0 || got.FontOpacity != 1.0 ||
+		got.Provider != "mymemory" || got.GoogleAPIKey != "" {
 		t.Fatalf("默认配置错误: %+v", got)
 	}
 }

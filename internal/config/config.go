@@ -19,6 +19,14 @@ type Config struct {
 	ShowSelectionSource bool    `json:"show_selection_source"`
 	WindowOpacity       float64 `json:"window_opacity"`
 	FontOpacity         float64 `json:"font_opacity"`
+	// Provider 为翻译引擎名称（mymemory / google），空值表示默认 mymemory。
+	Provider string `json:"provider"`
+	// GoogleAPIKey 为 Google 翻译 v2 的 API Key，仅 provider=google 时使用。
+	GoogleAPIKey string `json:"google_api_key"`
+	// GoogleAPIBaseURL 为 Google 接口地址（完整端点）；空值表示使用默认地址。
+	GoogleAPIBaseURL string `json:"google_api_base_url"`
+	// APIBaseURL 为 MyMemory 接口地址（基地址，不含 /get 查询路径）；空值表示使用引擎默认地址。
+	APIBaseURL string `json:"api_base_url"`
 }
 
 // Default 返回默认配置。
@@ -28,6 +36,10 @@ func Default() Config {
 		ShowSelectionSource: true,
 		WindowOpacity:       1.0,
 		FontOpacity:         1.0,
+		Provider:            "mymemory",
+		GoogleAPIKey:        "",
+		GoogleAPIBaseURL:    "",
+		APIBaseURL:          "",
 	}
 }
 

@@ -3,7 +3,7 @@ package translator
 
 import (
 	"context"
-	"os"
+	"sync/atomic"
 )
 
 // Language 表示一种语言。Code 为 RFC3066 语言代码（如 "zh-CN"）。
@@ -22,10 +22,25 @@ type Provider interface {
 	Languages() []Language
 }
 
-// New 返回当前生效的翻译引擎。
-// 通过环境变量 GOTRANS_PROVIDER 选择，默认使用免费的 MyMemory。
-func New() Provider {
-	switch os.Getenv("GOTRANS_PROVIDER") {
+// providerRef 统一包装 Provider，作为 atomic.Value 的存储类型。
+// 不同引擎的具体类型（*mymemory、*google）各不相同，直接存入 atomic.Value
+// 会触发「store of inconsistently typed value」panic，故用固定类型包装。
+type providerRef struct {
+	p Provider
+}
+
+// current 保存当前生效的引擎，翻译时实时读取，便于设置界面动态切换。
+var current atomic.Value
+
+func init() {
+	current.Store(providerRef{newMyMemory()})
+}
+
+// New 根据 provider 名称构造引擎：默认或空值为 MyMemory，google 为 Google 翻译。
+func New(provider, googleAPIKey string) Provider {
+	switch provider {
+	case "google":
+		return newGoogle(googleAPIKey)
 	case "mymemory", "":
 		return newMyMemory()
 	default:
@@ -33,3 +48,9 @@ func New() Provider {
 		return newMyMemory()
 	}
 }
+
+// Current 返回当前生效的引擎。
+func Current() Provider { return current.Load().(providerRef).p }
+
+// SetProvider 切换当前引擎（供设置界面调用）。
+func SetProvider(p Provider) { current.Store(providerRef{p}) }

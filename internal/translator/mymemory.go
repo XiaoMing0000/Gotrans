@@ -7,8 +7,32 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"time"
 )
+
+// DefaultAPIBase 是 MyMemory 引擎的默认接口地址（基地址，不含 /get）。
+const DefaultAPIBase = "https://api.mymemory.translated.net"
+
+// apiBase 保存当前生效的接口地址，翻译时实时读取，便于设置界面动态更新。
+var apiBase atomic.Value
+
+func init() {
+	apiBase.Store(DefaultAPIBase)
+}
+
+// SetAPIBase 更新接口地址；空值或纯空白回退到默认地址。
+func SetAPIBase(base string) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = DefaultAPIBase
+	}
+	apiBase.Store(base)
+}
+
+// APIBase 返回当前生效的接口地址。
+func APIBase() string { return apiBase.Load().(string) }
 
 // mymemory 使用 MyMemory 免费翻译 API（无需 Key）。
 // 文档：https://mymemory.translated.net/doc/spec.php
@@ -56,8 +80,8 @@ func (m *mymemory) Translate(ctx context.Context, text string, from, to Language
 	q.Set("q", text)
 	q.Set("langpair", from.Code+"|"+to.Code)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://api.mymemory.translated.net/get?"+q.Encode(), nil)
+	base := strings.TrimRight(apiBase.Load().(string), "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/get?"+q.Encode(), nil)
 	if err != nil {
 		return "", fmt.Errorf("构造请求失败: %w", err)
 	}

@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,9 +28,19 @@ const (
 	selPlaceholder = "（在其它应用中框选文字，原文将显示在这里）"
 )
 
-// Build 构造并返回应用主窗口。provider 为翻译引擎。
-func Build(a fyne.App, p translator.Provider) fyne.Window {
+// Build 构造并返回应用主窗口。翻译引擎按配置/环境变量加载，可运行时切换。
+func Build(a fyne.App) fyne.Window {
 	cfg, _ := config.Load()
+
+	// 应用保存的接口地址，并确定/切换当前翻译引擎（配置优先，环境变量兜底）。
+	translator.SetAPIBase(cfg.APIBaseURL)
+	translator.SetGoogleAPIBase(cfg.GoogleAPIBaseURL)
+	providerName := cfg.Provider
+	if providerName == "" {
+		providerName = os.Getenv("GOTRANS_PROVIDER")
+	}
+	cfg.Provider = providerName
+	translator.SetProvider(translator.New(providerName, cfg.GoogleAPIKey))
 
 	// 字体透明度通过主题只作用于文字颜色；窗口透明度走 X11 整窗属性（见文件末尾）。
 	a.Settings().SetTheme(&fontOpacityTheme{
@@ -42,7 +52,7 @@ func Build(a fyne.App, p translator.Provider) fyne.Window {
 	w.Resize(fyne.NewSize(860, 620))
 
 	// 语种下拉框：以 Name 为选项，内部映射回 Language。
-	langs := p.Languages()
+	langs := translator.Current().Languages()
 	names := make([]string, len(langs))
 	byName := make(map[string]translator.Language, len(langs))
 	for i, l := range langs {
@@ -63,25 +73,7 @@ func Build(a fyne.App, p translator.Provider) fyne.Window {
 	status := widget.NewLabel("就绪")
 	status.Wrapping = fyne.TextTruncate
 
-	// 当前源/目标语言，供后台划词 goroutine 安全读取。
-	var langMu sync.Mutex
-	curFrom := byName["英语"]
-	curTo := byName["中文（简体）"]
-	srcSelect.OnChanged = func(name string) {
-		langMu.Lock()
-		curFrom = byName[name]
-		langMu.Unlock()
-	}
-	dstSelect.OnChanged = func(name string) {
-		langMu.Lock()
-		curTo = byName[name]
-		langMu.Unlock()
-	}
-	getLang := func() (translator.Language, translator.Language) {
-		langMu.Lock()
-		defer langMu.Unlock()
-		return curFrom, curTo
-	}
+	// 划词翻译方向不跟随主界面语言选择，而是按选区文本自动判定中/英方向（见 detectLangPair）。
 
 	// 划词翻译开关；selSeq 作为版本号，清空或产生新选区时递增，
 	// 用于丢弃过期的在途翻译结果。
@@ -102,7 +94,7 @@ func Build(a fyne.App, p translator.Provider) fyne.Window {
 		selSource.SetText("划词翻译不可用")
 		selResult.SetText(err.Error())
 	} else {
-		go watchSelection(watcher, p, getLang, selEnabled, selSeq, selSource, selResult)
+		go watchSelection(watcher, selEnabled, selSeq, selSource, selResult)
 	}
 
 	// 划词栏：显示原文时原文/译文左右并排；隐藏原文时译文全宽填充。
@@ -151,6 +143,7 @@ func Build(a fyne.App, p translator.Provider) fyne.Window {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
+			p := translator.Current()
 			res, err := p.Translate(ctx, text, from, to)
 			// 网络请求在后台执行，结果必须回到 UI 线程刷新控件。
 			fyne.Do(func() {
@@ -212,7 +205,7 @@ func Build(a fyne.App, p translator.Provider) fyne.Window {
 	return w
 }
 
-// showSettings 弹出设置对话框：划词开关 + 显示原文 + 窗口/字体透明度滑杆。
+// showSettings 弹出设置对话框：接口地址 + 划词开关 + 显示原文 + 窗口/字体透明度滑杆。
 func showSettings(a fyne.App, parent fyne.Window, cfg *config.Config,
 	setSelectionEnabled func(on bool), setSelectionBar func(showSource bool)) {
 
@@ -279,7 +272,68 @@ func showSettings(a fyne.App, parent fyne.Window, cfg *config.Config,
 		_ = cfg.Save()
 	}
 
+	// 翻译引擎选择：MyMemory / Google，切换后立即生效。
+	engineNames := []string{"MyMemory", "Google Translate"}
+	engineToProvider := map[string]string{"MyMemory": "mymemory", "Google Translate": "google"}
+	providerToEngine := map[string]string{"mymemory": "MyMemory", "google": "Google Translate"}
+
+	engineSelect := widget.NewSelect(engineNames, nil)
+	if display, ok := providerToEngine[cfg.Provider]; ok {
+		engineSelect.SetSelected(display)
+	} else {
+		engineSelect.SetSelected("MyMemory")
+	}
+	engineSelect.OnChanged = func(display string) {
+		cfg.Provider = engineToProvider[display]
+		translator.SetProvider(translator.New(cfg.Provider, cfg.GoogleAPIKey))
+		_ = cfg.Save()
+	}
+
+	// Google API Key：仅 Google 引擎使用，密码框隐藏、支持点击显示。
+	googleKeyEntry := widget.NewPasswordEntry()
+	googleKeyEntry.SetPlaceHolder("Google API Key")
+	googleKeyEntry.SetText(cfg.GoogleAPIKey)
+	googleKeyEntry.OnChanged = func(v string) {
+		v = strings.TrimSpace(v)
+		cfg.GoogleAPIKey = v
+		if cfg.Provider == "google" {
+			translator.SetProvider(translator.New("google", v))
+		}
+		_ = cfg.Save()
+	}
+
+	// 接口地址（Google）：完整端点地址，留空恢复默认。
+	googleAPIEntry := widget.NewEntry()
+	googleAPIEntry.SetPlaceHolder(translator.DefaultGoogleAPIBase)
+	googleAPIEntry.SetText(translator.GoogleAPIBase())
+	googleAPIEntry.OnChanged = func(v string) {
+		v = strings.TrimSpace(v)
+		cfg.GoogleAPIBaseURL = v
+		translator.SetGoogleAPIBase(v)
+		_ = cfg.Save()
+	}
+
+	// 接口地址（MyMemory）：服务基地址（不含 /get），留空恢复默认。
+	apiEntry := widget.NewEntry()
+	apiEntry.SetPlaceHolder(translator.DefaultAPIBase)
+	apiEntry.SetText(translator.APIBase())
+	apiEntry.OnChanged = func(v string) {
+		v = strings.TrimSpace(v)
+		cfg.APIBaseURL = v
+		translator.SetAPIBase(v)
+		_ = cfg.Save()
+	}
+
 	content := container.NewVBox(
+		widget.NewLabel("翻译引擎："),
+		engineSelect,
+		widget.NewLabel("Google API Key："),
+		googleKeyEntry,
+		widget.NewLabel("接口地址（Google）："),
+		googleAPIEntry,
+		widget.NewLabel("接口地址（MyMemory）："),
+		apiEntry,
+		widget.NewLabel("Google 接口地址为完整端点；MyMemory 接口地址为服务基地址（不含 /get 查询路径），留空均恢复默认。"),
 		check,
 		selectionSub,
 		opacityLabel,
@@ -333,8 +387,8 @@ func applyOpacityWithRetry(opacity float64) {
 }
 
 // watchSelection 轮询全局 PRIMARY 选区，变化时翻译并刷新面板。
-func watchSelection(watcher *selection.Watcher, p translator.Provider,
-	getLang func() (translator.Language, translator.Language),
+// 翻译方向按选区文本自动判定中/英（中文→英语，否则英语→中文）。
+func watchSelection(watcher *selection.Watcher,
 	enabled *atomic.Bool, seq *atomic.Uint64, selSource, selResult *widget.Entry) {
 
 	var last string
@@ -359,7 +413,7 @@ func watchSelection(watcher *selection.Watcher, p translator.Provider,
 		// 新选区：递增版本号，使之前尚未返回的翻译结果失效。
 		token := seq.Add(1)
 		last = text
-		from, to := getLang()
+		from, to := detectLangPair(text)
 
 		fyne.Do(func() {
 			selSource.SetText(truncate(text, 300))
@@ -367,7 +421,7 @@ func watchSelection(watcher *selection.Watcher, p translator.Provider,
 		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		res, err := p.Translate(ctx, text, from, to)
+		res, err := translator.Current().Translate(ctx, text, from, to)
 		cancel()
 
 		// 期间若点击了清空或产生了新一轮选区，则丢弃本次结果。
@@ -390,4 +444,28 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// detectLangPair 根据选区文本自动判定源/目标语言：含中文则中文→英语，否则英语→中文。
+func detectLangPair(text string) (from, to translator.Language) {
+	if containsHan(text) {
+		return translator.Language{Code: "zh-CN", Name: "中文（简体）"},
+			translator.Language{Code: "en", Name: "英语"}
+	}
+	return translator.Language{Code: "en", Name: "英语"},
+		translator.Language{Code: "zh-CN", Name: "中文（简体）"}
+}
+
+// containsHan 判断文本是否包含中文（汉字或常用全角中文标点）。
+func containsHan(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= 0x4E00 && r <= 0x9FFF, // CJK 统一表意文字
+			r >= 0x3400 && r <= 0x4DBF, // CJK 扩展 A
+			r >= 0xF900 && r <= 0xFAFF, // CJK 兼容表意文字
+			r >= 0x3000 && r <= 0x303F: // CJK 标点
+			return true
+		}
+	}
+	return false
 }
