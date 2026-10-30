@@ -1,0 +1,26 @@
+# 编译产物
+/gotrans
+
+# Go 生成的二进制与测试产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# 依赖（若启用 vendor）
+vendor/
+
+# 编辑器 / IDE
+.idea/
+.vscode/
+*.swp
+
+# 系统文件
+.DS_Store
