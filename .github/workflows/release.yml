@@ -88,14 +88,29 @@ jobs:
       - name: Build NSIS installer
         shell: pwsh
         run: |
-          # choco install 只写系统 PATH，不会刷新当前 runner 进程环境，需手动重读，
-          # 否则本步骤的新 shell 找不到 makensis。
+          # choco install 只写系统 PATH，不会刷新当前 runner 进程环境，需手动重读。
           $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+          # 定位 makensis：先走 PATH，找不到再回退到 choco / NSIS 的常见安装目录。
+          $makensis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          if (-not $makensis) {
+            $candidates = @(
+              "C:\ProgramData\chocolatey\bin\makensis.exe",
+              "C:\Program Files (x86)\NSIS\makensis.exe",
+              "C:\Program Files\NSIS\makensis.exe"
+            )
+            $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $makensis) { throw "makensis not found. PATH=$env:Path" }
+          Write-Host "using makensis: $makensis"
           $V = $env:APP_TAG -replace '^v', ''
           $exe = Get-ChildItem -Path dist -Recurse -Filter gotrans.exe | Select-Object -First 1
-          if (-not $exe) { throw "gotrans.exe not found in dist" }
+          if (-not $exe) {
+            Write-Host "=== dist tree ==="
+            Get-ChildItem -Path dist -Recurse | ForEach-Object { $_.FullName }
+            throw "gotrans.exe not found in dist"
+          }
           Copy-Item $exe.FullName dist\gotrans.exe
-          makensis "/DVERSION=$V" /DARCH=amd64 build/gotrans.nsi
+          & $makensis "/DVERSION=$V" /DARCH=amd64 build/gotrans.nsi
       - uses: actions/upload-artifact@v4
         with:
           name: dist-windows-amd64
