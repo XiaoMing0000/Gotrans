@@ -119,20 +119,23 @@ jobs:
             Get-ChildItem -Path dist -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
             throw "gotrans.exe not found in dist"
           }
-          $distExe = Join-Path (Get-Location) "dist\gotrans.exe"
-          Copy-Item -LiteralPath $exe.FullName -Destination $distExe -Force
-          Write-Host "copied $($exe.FullName) -> $distExe"
-
-          # 版本号去掉前缀 v；显式检查退出码，把 makensis 的真实报错暴露到日志。
+          # 版本号去掉前缀 v。
           $V = $env:APP_TAG -replace '^v', ''
+          # 用绝对路径把 exe 与输出 setup.exe 传给 makensis，彻底规避相对路径解析歧义。
+          $distDir = (Resolve-Path dist).Path
+          $exePath = $exe.FullName
+          $outPath = Join-Path $distDir "gotrans_${V}_windows_amd64_setup.exe"
+          Write-Host "exe: $exePath"
+          Write-Host "out: $outPath"
+
+          # 显式检查退出码，把 makensis 的真实报错暴露到日志。
           $PSNativeCommandUseErrorActionPreference = $false
-          & $makensis "/DVERSION=$V" "/DARCH=amd64" "build/gotrans.nsi"
+          & $makensis "/DVERSION=$V" "/DARCH=amd64" "/DEXE=$exePath" "/DOUT=$outPath" "build/gotrans.nsi"
           if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
 
           # 确认安装器已生成。
-          $setup = Get-ChildItem -Path dist -Filter '*_setup.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $setup) { throw "setup.exe was not produced by makensis" }
-          Write-Host "produced: $($setup.FullName)"
+          if (-not (Test-Path -LiteralPath $outPath)) { throw "setup.exe was not produced: $outPath" }
+          Write-Host "produced: $outPath"
       - uses: actions/upload-artifact@v4
         with:
           name: dist-windows-amd64

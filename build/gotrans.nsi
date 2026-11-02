@@ -1,6 +1,6 @@
 ; Gotrans Windows 安装器（NSIS）。
-; 用法：makensis /DVERSION=1.2.3 /DARCH=amd64 build/gotrans.nsi
-; 前置：先把 goreleaser 编译出的 gotrans.exe 复制到 dist\gotrans.exe。
+; 用法：makensis /DVERSION=1.2.3 /DARCH=amd64 /DEXE=<exe绝对路径> /DOUT=<setup.exe绝对路径> build/gotrans.nsi
+; EXE/OUT 用绝对路径传入，避免相对路径随 makensis 工作目录变化而解析错位。
 Unicode true
 
 !ifndef VERSION
@@ -9,9 +9,15 @@ Unicode true
 !ifndef ARCH
   !define ARCH "amd64"
 !endif
+!ifndef EXE
+  !define EXE "dist\gotrans.exe"
+!endif
+!ifndef OUT
+  !define OUT "dist\gotrans_${VERSION}_windows_${ARCH}_setup.exe"
+!endif
 
 Name "Gotrans"
-OutFile "dist\gotrans_${VERSION}_windows_${ARCH}_setup.exe"
+OutFile "${OUT}"
 InstallDir "$PROGRAMFILES64\Gotrans"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
@@ -21,7 +27,7 @@ Page instfiles
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File "dist\gotrans.exe"
+  File /oname=gotrans.exe "${EXE}"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   CreateShortcut "$DESKTOP\Gotrans.lnk" "$INSTDIR\gotrans.exe"
   CreateDirectory "$SMPROGRAMS\Gotrans"
