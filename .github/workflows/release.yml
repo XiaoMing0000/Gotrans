@@ -1,0 +1,191 @@
+# 发布流程：push tag `v*` 或手动触发时，在各原生 runner 上构建并打包多 OS/架构，
+# 最后汇总产物、生成 SHA256SUMS 并发布一个 GitHub Release。
+#
+# 设计要点：
+#   - 采用「原生矩阵 + GoReleaser」：cgo 依赖（glfw/X11）无法可靠交叉编译，
+#     因此每个 OS/架构各用一个 job 在原生环境构建。
+#   - GoReleaser v2 的 `release` 命令没有 `--id` 过滤，也移除了 nsis 支持，
+#     因此每个目标使用独立的 config 文件；Windows NSIS 安装器改用 makensis 单独产出。
+#   - Linux 在 AlmaLinux 9 容器内构建，保证 glibc 2.34 下限、.rpm 可装 EL9。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # 用于 makensis / .app / .dmg 等手动打包步骤的版本号；tag 触发时为 vX.Y.Z。
+  APP_TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+  # 非 tag 触发（手动 workflow_dispatch）时加 --snapshot，避免 goreleaser 因「未打 tag」直接失败。
+  SNAPSHOT: ${{ github.ref_type == 'tag' && '' || '--snapshot' }}
+
+jobs:
+  build-linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build AlmaLinux 9 builder image
+        run: docker build -f build/el9.Dockerfile --build-arg TARGETARCH=amd64 -t gotrans-el9:amd64 .
+      - name: Release (linux amd64)
+        run: |
+          docker run --rm \
+            -v "$PWD":/src -w /src \
+            -e GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            gotrans-el9:amd64 \
+            release --clean --skip=publish ${SNAPSHOT} -f .goreleaser-linux-amd64.yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-amd64
+          path: dist/
+          if-no-files-found: error
+
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build AlmaLinux 9 builder image (arm64)
+        run: docker build -f build/el9.Dockerfile --build-arg TARGETARCH=arm64 -t gotrans-el9:arm64 .
+      - name: Release (linux arm64)
+        run: |
+          docker run --rm \
+            -v "$PWD":/src -w /src \
+            -e GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            gotrans-el9:arm64 \
+            release --clean --skip=publish ${SNAPSHOT} -f .goreleaser-linux-arm64.yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-arm64
+          path: dist/
+          if-no-files-found: error
+
+  build-windows-amd64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - name: Install mingw and NSIS
+        run: choco install mingw nsis -y --no-progress
+      - name: Release (windows amd64)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --skip=publish ${{ env.SNAPSHOT }} -f .goreleaser-windows-amd64.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $V = $env:APP_TAG -replace '^v', ''
+          $exe = Get-ChildItem -Path dist -Recurse -Filter gotrans.exe | Select-Object -First 1
+          if (-not $exe) { throw "gotrans.exe not found in dist" }
+          Copy-Item $exe.FullName dist\gotrans.exe
+          makensis "/DVERSION=$V" /DARCH=amd64 build/gotrans.nsi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-amd64
+          path: dist/
+          if-no-files-found: error
+
+  build-darwin-amd64:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - name: Release (darwin amd64)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --skip=publish ${{ env.SNAPSHOT }} -f .goreleaser-darwin-amd64.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package .app and .dmg
+        run: |
+          V="${APP_TAG#v}"
+          BIN="$(find dist -type f -name gotrans | head -n1)"
+          [ -n "$BIN" ] || { echo "gotrans binary not found in dist"; exit 1; }
+          bash build/package-macos.sh "$BIN" "$V" amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-darwin-amd64
+          path: dist/
+          if-no-files-found: error
+
+  build-darwin-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - name: Release (darwin arm64)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --skip=publish ${{ env.SNAPSHOT }} -f .goreleaser-darwin-arm64.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package .app and .dmg
+        run: |
+          V="${APP_TAG#v}"
+          BIN="$(find dist -type f -name gotrans | head -n1)"
+          [ -n "$BIN" ] || { echo "gotrans binary not found in dist"; exit 1; }
+          bash build/package-macos.sh "$BIN" "$V" arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-darwin-arm64
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs:
+      - build-linux-amd64
+      - build-linux-arm64
+      - build-windows-amd64
+      - build-darwin-amd64
+      - build-darwin-arm64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-merged
+          merge-multiple: true
+      - name: Assemble artifacts and checksums
+        run: |
+          mkdir -p out
+          # 只收集最终交付物（归档/安装器/镜像），跳过裸二进制与 goreleaser 的 metadata.json。
+          find dist-merged -type f \( \
+            -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' \
+            -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.flatpak' \
+            -o -name '*_setup.exe' \) \
+            -exec cp -n {} out/ \;
+          cd out && sha256sum * > SHA256SUMS
+          ls -la
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true

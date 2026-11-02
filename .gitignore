@@ -24,3 +24,11 @@ vendor/
 
 # 系统文件
 .DS_Store
+
+# GoReleaser / CI 产物
+/dist/
+/Gotrans.app
+*.dmg
+*.AppImage
+*.flatpak
+

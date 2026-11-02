@@ -1,3 +1,5 @@
+//go:build linux
+
 package x11win
 
 import (
@@ -208,4 +210,31 @@ func u32s(v []uint32) []byte {
 		binary.LittleEndian.PutUint32(b[i*4:i*4+4], x)
 	}
 	return b
+}
+
+// intern 缓存并返回指定名字的 atom。
+func intern(conn *xgb.Conn, name string) xproto.Atom {
+	r, err := xproto.InternAtom(conn, false, uint16(len(name)), name).Reply()
+	if err != nil {
+		return xproto.AtomNone
+	}
+	return r.Atom
+}
+
+// windowList 把 _NET_CLIENT_LIST 的属性值（窗口 ID 小端序列）解析为窗口列表。
+func windowList(data []byte) []xproto.Window {
+	var out []xproto.Window
+	for i := 0; i+4 <= len(data); i += 4 {
+		out = append(out, xproto.Window(binary.LittleEndian.Uint32(data[i:i+4])))
+	}
+	return out
+}
+
+// readText 读取窗口 atom 属性的文本值；属性缺失或类型不匹配返回空串。
+func readText(conn *xgb.Conn, win xproto.Window, atom, typ xproto.Atom) string {
+	reply, err := xproto.GetProperty(conn, false, win, atom, typ, 0, 1<<20).Reply()
+	if err != nil || reply.Type == xproto.AtomNone {
+		return ""
+	}
+	return string(reply.Value)
 }

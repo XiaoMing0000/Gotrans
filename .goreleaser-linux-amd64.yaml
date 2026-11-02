@@ -1,0 +1,36 @@
+# Linux amd64：裸二进制(tar.gz) + .deb + .rpm。
+# 在 build/el9.Dockerfile 构建出的 AlmaLinux 9 容器内运行，保证 glibc 2.34 下限、
+# 产出的 .rpm 可直接安装到 EL9。仅 Linux 才加 -tags x11（Fyne 的 X11 后端）。
+# 用法: goreleaser release --clean --skip=publish -f .goreleaser-linux-amd64.yaml
+version: 2
+
+project_name: gotrans
+
+builds:
+  - id: linux-amd64
+    goos: [linux]
+    goarch: [amd64]
+    tags: [x11]
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      - "-s -w -X main.version={{ .Version }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+# 包元信息里的 vendor/homepage/maintainer/license 为占位，请按需修改。
+nfpms:
+  - formats: [deb, rpm]
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    vendor: Gotrans
+    homepage: https://github.com/xiaoming0000/gotrans
+    maintainer: xiaoming0000 <xiaoming0000@users.noreply.github.com>
+    description: 桌面翻译工具（Go + Fyne，支持划词翻译）
+    license: MIT
+    contents:
+      - src: build/gotrans.desktop
+        dst: /usr/share/applications/gotrans.desktop
+      - src: internal/ui/assets/logo.png
+        dst: /usr/share/icons/hicolor/256x256/apps/gotrans.png

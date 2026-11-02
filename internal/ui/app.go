@@ -19,13 +19,16 @@ import (
 	"gotrans/internal/config"
 	"gotrans/internal/selection"
 	"gotrans/internal/translator"
-	"gotrans/internal/x11win"
 )
 
 const (
 	windowTitle    = "Go 翻译 · Gotrans"
 	selPlaceholder = "（在其它应用中框选文字，原文将显示在这里）"
 )
+
+// Version 应用版本号，由 main 在启动时用构建注入的值覆盖（见 main.go 的 -X main.version），
+// 用于在设置窗口展示。
+var Version = "dev"
 
 // Build 构造并返回应用主窗口。翻译引擎按配置/环境变量加载，可运行时切换。
 func Build(a fyne.App) fyne.Window {
@@ -41,11 +44,15 @@ func Build(a fyne.App) fyne.Window {
 	cfg.Provider = providerName
 	translator.SetProvider(providerFromConfig(&cfg))
 
-	// 字体透明度通过主题只作用于文字颜色；窗口透明度走 X11 整窗属性（见文件末尾）。
-	a.Settings().SetTheme(&fontOpacityTheme{
-		Theme: theme.DefaultTheme(),
-		alpha: config.ClampOpacity(cfg.FontOpacity),
+	// 窗口透明度作用于背景/输入底色，字体透明度只作用于文字颜色，二者经主题分别设置、互不影响。
+	a.Settings().SetTheme(&opacityTheme{
+		Theme:       theme.DefaultTheme(),
+		windowAlpha: config.ClampOpacity(cfg.WindowOpacity),
+		fontAlpha:   config.ClampOpacity(cfg.FontOpacity),
 	})
+
+	// 应用图标设为 logo；新建的窗口（主窗口与后续悬浮窗）会自动继承。
+	a.SetIcon(appIcon())
 
 	w := a.NewWindow(windowTitle)
 	w.Resize(fyne.NewSize(860, 620))
@@ -104,7 +111,7 @@ func Build(a fyne.App) fyne.Window {
 			floatState.win.RequestFocus()
 			return
 		}
-		floatState = newFloatWindow(a, w, selResult.Text, cfg.WindowOpacity, func() {
+		floatState = newFloatWindow(a, w, selResult.Text, func() {
 			floatState = nil
 		})
 	}
@@ -225,10 +232,6 @@ func Build(a fyne.App) fyne.Window {
 		_ = cfg.Save()
 	})
 
-	// 窗口显示后按保存的配置应用窗口透明度（需等 X11 窗口出现）。
-	if cfg.WindowOpacity < 0.999 {
-		applyOpacityWithRetry(cfg.WindowOpacity)
-	}
 	return w
 }
 
@@ -261,11 +264,13 @@ func showSettings(a fyne.App, parent fyne.Window, cfg *config.Config,
 	// 子选项缩进显示在「启用划词翻译」下方。
 	selectionSub := container.NewHBox(widget.NewLabel("    "), showSource)
 
-	// applyFontTheme 按当前字体透明度重建主题并立即生效（只作用于文字颜色）。
-	applyFontTheme := func() {
-		a.Settings().SetTheme(&fontOpacityTheme{
-			Theme: theme.DefaultTheme(),
-			alpha: config.ClampOpacity(cfg.FontOpacity),
+	// applyOpacityTheme 按当前窗口/字体透明度重建主题并立即生效：
+	// 窗口透明度作用于背景/输入底色，字体透明度只作用于文字颜色，二者互不影响。
+	applyOpacityTheme := func() {
+		a.Settings().SetTheme(&opacityTheme{
+			Theme:       theme.DefaultTheme(),
+			windowAlpha: config.ClampOpacity(cfg.WindowOpacity),
+			fontAlpha:   config.ClampOpacity(cfg.FontOpacity),
 		})
 	}
 
@@ -277,7 +282,7 @@ func showSettings(a fyne.App, parent fyne.Window, cfg *config.Config,
 		v = config.ClampOpacity(v)
 		cfg.WindowOpacity = v
 		opacityLabel.SetText(fmt.Sprintf("窗口透明度：%.0f%%", v*100))
-		go func() { _ = x11win.SetOpacityByTitle(windowTitle, float32(v)) }()
+		applyOpacityTheme()
 	}
 	slider.OnChangeEnded = func(v float64) {
 		cfg.WindowOpacity = config.ClampOpacity(v)
@@ -292,7 +297,7 @@ func showSettings(a fyne.App, parent fyne.Window, cfg *config.Config,
 		v = config.ClampOpacity(v)
 		cfg.FontOpacity = v
 		fontOpacityLabel.SetText(fmt.Sprintf("字体透明度：%.0f%%", v*100))
-		applyFontTheme()
+		applyOpacityTheme()
 	}
 	fontSlider.OnChangeEnded = func(v float64) {
 		cfg.FontOpacity = config.ClampOpacity(v)
@@ -552,27 +557,35 @@ func showSettings(a fyne.App, parent fyne.Window, cfg *config.Config,
 		fontOpacityLabel,
 		fontSlider,
 		widget.NewLabel("提示：两项透明度下限均为 20%，防止窗口或文字完全透明后无法操作。"),
+		widget.NewLabel("版本："+Version),
 	)
 	dialog.ShowCustom("设置", "关闭", content, parent)
 }
 
-// fontOpacityTheme 在默认主题上只对文字颜色附加透明度，实现「字体透明度」。
-// 窗口透明度走 X11 整窗属性，两者互不影响。
-type fontOpacityTheme struct {
+// opacityTheme 在默认主题上分别对背景与文字附加透明度：
+// 窗口透明度（windowAlpha）作用于背景/输入底色，字体透明度（fontAlpha）只作用于文字颜色，二者互不影响。
+type opacityTheme struct {
 	fyne.Theme
-	alpha float64
+	windowAlpha float64
+	fontAlpha   float64
 }
 
-func (t *fontOpacityTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+func (t *opacityTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
 	c := t.Theme.Color(name, variant)
-	if !isTextColor(name) {
+	var alpha float64
+	switch {
+	case isTextColor(name):
+		alpha = t.fontAlpha
+	case isBackgroundColor(name):
+		alpha = t.windowAlpha
+	default:
 		return c
 	}
 	n, ok := color.NRGBAModel.Convert(c).(color.NRGBA)
 	if !ok {
 		return c
 	}
-	n.A = uint8(t.alpha*255 + 0.5)
+	n.A = uint8(alpha*255 + 0.5)
 	return n
 }
 
@@ -585,16 +598,14 @@ func isTextColor(name fyne.ThemeColorName) bool {
 	return false
 }
 
-// applyOpacityWithRetry 在窗口出现后重试设置窗口透明度。
-func applyOpacityWithRetry(opacity float64) {
-	go func() {
-		for i := 0; i < 24; i++ {
-			time.Sleep(250 * time.Millisecond)
-			if x11win.SetOpacityByTitle(windowTitle, float32(opacity)) == nil {
-				return
-			}
-		}
-	}()
+// isBackgroundColor 判断颜色名是否为窗口背景/输入底色，窗口透明度作用于这些颜色，
+// 使窗口整体（含输入框底）淡化，而文字仍按字体透明度单独渲染。
+func isBackgroundColor(name fyne.ThemeColorName) bool {
+	switch name {
+	case theme.ColorNameBackground, theme.ColorNameInputBackground:
+		return true
+	}
+	return false
 }
 
 // watchSelection 轮询全局 PRIMARY 选区，变化时翻译并刷新面板。

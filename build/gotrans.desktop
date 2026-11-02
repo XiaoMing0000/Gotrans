@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Gotrans
+GenericName=Translator
+Comment=Desktop translation tool
+Exec=gotrans
+Icon=gotrans
+Terminal=false
+Categories=Utility;Network;
+Keywords=translate;翻译;

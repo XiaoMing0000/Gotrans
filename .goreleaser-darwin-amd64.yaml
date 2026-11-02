@@ -1,0 +1,19 @@
+# macOS amd64：裸二进制(tar.gz)。.app/.dmg 由 CI 里 build/package-macos.sh 产出
+# （用 goreleaser 编译出的二进制组装，避免引入 fyne CLI 的版本依赖）。
+# 用法: goreleaser release --clean --skip=publish -f .goreleaser-darwin-amd64.yaml
+version: 2
+
+project_name: gotrans
+
+builds:
+  - id: darwin-amd64
+    goos: [darwin]
+    goarch: [amd64]
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      - "-s -w -X main.version={{ .Version }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

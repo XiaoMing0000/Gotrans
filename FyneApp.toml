@@ -1,0 +1,12 @@
+[Details]
+Name = "Gotrans"
+ID = "com.example.gotrans"
+Version = "0.0.0"
+Build = 1
+Icon = "internal/ui/assets/logo.png"
+
+[LinuxAndBSD]
+GenericName = "Translator"
+Comment = "Desktop translation tool"
+Categories = ["Utility", "Network"]
+Keywords = ["translate", "翻译"]

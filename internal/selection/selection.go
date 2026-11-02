@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package selection 读取 X11 的 PRIMARY 选区——即用鼠标「框选」产生的选区，
 // 与 Ctrl+C 写入的 CLIPBOARD 不同。仅在 X11 / XWayland 下可用，原生 Wayland 下不可用。
 package selection

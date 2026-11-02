@@ -1,0 +1,20 @@
+# Windows amd64：裸二进制(.exe，打进 zip)。NSIS 安装器由 CI 里单独的 makensis 步骤产出，
+# 因为 GoReleaser v2 已移除 nsis 支持。
+# 用法: goreleaser release --clean --skip=publish -f .goreleaser-windows-amd64.yaml
+version: 2
+
+project_name: gotrans
+
+builds:
+  - id: windows-amd64
+    goos: [windows]
+    goarch: [amd64]
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      # -H=windowsgui 去掉控制台窗口（GUI 程序）。
+      - "-s -w -H=windowsgui -X main.version={{ .Version }}"
+
+archives:
+  - formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

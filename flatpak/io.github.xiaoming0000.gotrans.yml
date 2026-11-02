@@ -1,0 +1,32 @@
+# Flatpak 清单（参考，未接入主 workflow）。发布到 Flathub 时需把 app-id 换成真实域名，
+# 并在 CI 现场验证（Go SDK 扩展 + cgo/X11 依赖）。
+# 本地迭代：
+#   flatpak-builder --user --install build-dir flatpak/io.github.xiaoming0000.gotrans.yml --force-clean
+app-id: io.github.xiaoming0000.gotrans
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+command: gotrans
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+build-options:
+  append-path: /usr/lib/sdk/golang/bin
+  build-args:
+    - --share=network   # go mod 下载依赖
+modules:
+  - name: gotrans
+    buildsystem: simple
+    build-commands:
+      - go build -tags x11 -trimpath -ldflags="-s -w" -o gotrans .
+      - install -Dm755 gotrans /app/bin/gotrans
+      - install -Dm644 build/gotrans.desktop /app/share/applications/io.github.xiaoming0000.gotrans.desktop
+      - install -Dm644 internal/ui/assets/logo.png /app/share/icons/hicolor/256x256/apps/io.github.xiaoming0000.gotrans.png
+    sources:
+      - type: dir
+        path: .

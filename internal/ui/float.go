@@ -311,8 +311,9 @@ type floatWindow struct {
 }
 
 // newFloatWindow 创建并显示一个仅含译文的悬浮窗，隐藏主窗口 parent。
+// 窗口/字体透明度由全局主题统一控制（见 app.go 的 opacityTheme），此处无需单独设置。
 // onClosed 在悬浮窗被关闭（含恢复主窗口）时回调，用于清除外部持有的引用。
-func newFloatWindow(a fyne.App, parent fyne.Window, initialText string, windowOpacity float64, onClosed func()) *floatWindow {
+func newFloatWindow(a fyne.App, parent fyne.Window, initialText string, onClosed func()) *floatWindow {
 	fs := &floatWindow{}
 	fs.win = a.NewWindow(floatWindowTitle)
 	fs.scale = fs.win.Canvas().Scale()
@@ -346,8 +347,8 @@ func newFloatWindow(a fyne.App, parent fyne.Window, initialText string, windowOp
 	fs.win.Show()
 	parent.Hide()
 
-	// 窗口映射后移除边框、确认窗口可被定位，并按主窗口配置应用窗口透明度。
-	go fs.applyBorderless(windowOpacity)
+	// 窗口映射后移除边框、确认窗口可被定位。
+	go fs.applyBorderless()
 
 	return fs
 }
@@ -501,8 +502,8 @@ func (fs *floatWindow) applyGeometry(x, y, w, h int32) {
 	fs.win.Resize(fyne.NewSize(float32(w)/fs.scale, float32(h)/fs.scale))
 }
 
-// applyBorderless 在窗口出现后移除标题栏、确认窗口可定位，并应用窗口透明度。
-func (fs *floatWindow) applyBorderless(windowOpacity float64) {
+// applyBorderless 在窗口出现后移除标题栏、确认窗口可被定位。
+func (fs *floatWindow) applyBorderless() {
 	for i := 0; i < 24; i++ {
 		time.Sleep(250 * time.Millisecond)
 		if x11win.RemoveDecorationsByTitle(floatWindowTitle) != nil {
@@ -510,9 +511,6 @@ func (fs *floatWindow) applyBorderless(windowOpacity float64) {
 		}
 		if _, _, err := x11win.PositionByTitle(floatWindowTitle); err != nil {
 			continue
-		}
-		if windowOpacity < 0.999 {
-			_ = x11win.SetOpacityByTitle(floatWindowTitle, float32(windowOpacity))
 		}
 		fyne.Do(func() { fs.ready = true })
 		fs.applyRoundedCorners()

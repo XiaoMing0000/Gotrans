@@ -1,0 +1,34 @@
+# Linux arm64：裸二进制(tar.gz) + .deb + .rpm。
+# 在 arm64 版 AlmaLinux 9 容器内构建（glibc 2.34 下限）。
+# 用法: goreleaser release --clean --skip=publish -f .goreleaser-linux-arm64.yaml
+version: 2
+
+project_name: gotrans
+
+builds:
+  - id: linux-arm64
+    goos: [linux]
+    goarch: [arm64]
+    tags: [x11]
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      - "-s -w -X main.version={{ .Version }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+nfpms:
+  - formats: [deb, rpm]
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    vendor: Gotrans
+    homepage: https://github.com/xiaoming0000/gotrans
+    maintainer: xiaoming0000 <xiaoming0000@users.noreply.github.com>
+    description: 桌面翻译工具（Go + Fyne，支持划词翻译）
+    license: MIT
+    contents:
+      - src: build/gotrans.desktop
+        dst: /usr/share/applications/gotrans.desktop
+      - src: internal/ui/assets/logo.png
+        dst: /usr/share/icons/hicolor/256x256/apps/gotrans.png

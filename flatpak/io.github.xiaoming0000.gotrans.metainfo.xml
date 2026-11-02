@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.xiaoming0000.gotrans</id>
+  <name>Gotrans</name>
+  <summary>桌面翻译工具</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>一个用 Go + Fyne 编写的桌面翻译工具，支持 MyMemory 与 Google Cloud Translation，带划词翻译。</p>
+  </description>
+  <launchable type="desktop-id">io.github.xiaoming0000.gotrans.desktop</launchable>
+  <releases>
+    <release version="0.0.0" date="2026-11-02"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

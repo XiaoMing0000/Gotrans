@@ -1,3 +1,5 @@
+//go:build linux
+
 package x11win
 
 import (
