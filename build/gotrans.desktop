@@ -8,3 +8,4 @@ Icon=gotrans
 Terminal=false
 Categories=Utility;Network;
 Keywords=translate;翻译;
+StartupWMClass=gotrans
