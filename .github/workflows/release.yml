@@ -88,6 +88,9 @@ jobs:
       - name: Build NSIS installer
         shell: pwsh
         run: |
+          # choco install 只写系统 PATH，不会刷新当前 runner 进程环境，需手动重读，
+          # 否则本步骤的新 shell 找不到 makensis。
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
           $V = $env:APP_TAG -replace '^v', ''
           $exe = Get-ChildItem -Path dist -Recurse -Filter gotrans.exe | Select-Object -First 1
           if (-not $exe) { throw "gotrans.exe not found in dist" }
@@ -100,7 +103,7 @@ jobs:
           if-no-files-found: error
 
   build-darwin-amd64:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
         with:
@@ -129,7 +132,7 @@ jobs:
           if-no-files-found: error
 
   build-darwin-arm64:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
