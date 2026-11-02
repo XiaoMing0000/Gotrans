@@ -88,29 +88,51 @@ jobs:
       - name: Build NSIS installer
         shell: pwsh
         run: |
-          # choco install 只写系统 PATH，不会刷新当前 runner 进程环境，需手动重读。
+          # choco install 只写系统/注册表 PATH，不会刷新当前 runner 进程环境，需手动重读。
           $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
-          # 定位 makensis：先走 PATH，找不到再回退到 choco / NSIS 的常见安装目录。
-          $makensis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          # 显式切回仓库根目录，保证 makensis 脚本里 File/OutFile 的相对路径正确解析。
+          Set-Location $env:GITHUB_WORKSPACE
+
+          # 定位 makensis：PATH -> 已知安装目录 -> 递归查找 NSIS 目录。
+          $makensis = $null
+          $cmd = Get-Command makensis -ErrorAction SilentlyContinue
+          if ($cmd) { $makensis = $cmd.Source }
           if (-not $makensis) {
-            $candidates = @(
-              "C:\ProgramData\chocolatey\bin\makensis.exe",
+            $known = @(
               "C:\Program Files (x86)\NSIS\makensis.exe",
-              "C:\Program Files\NSIS\makensis.exe"
+              "C:\Program Files\NSIS\makensis.exe",
+              "C:\ProgramData\chocolatey\bin\makensis.exe"
             )
-            $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            $makensis = $known | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (-not $makensis) {
+            $makensis = Get-ChildItem -Path "C:\Program Files (x86)\NSIS","C:\Program Files\NSIS" -Recurse -Filter makensis.exe -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
           }
           if (-not $makensis) { throw "makensis not found. PATH=$env:Path" }
           Write-Host "using makensis: $makensis"
-          $V = $env:APP_TAG -replace '^v', ''
-          $exe = Get-ChildItem -Path dist -Recurse -Filter gotrans.exe | Select-Object -First 1
+
+          # 定位 goreleaser 产出的 gotrans.exe（位于 dist/<os>_<arch>/ 下）。
+          $exe = Get-ChildItem -Path dist -Recurse -Filter gotrans.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) {
             Write-Host "=== dist tree ==="
-            Get-ChildItem -Path dist -Recurse | ForEach-Object { $_.FullName }
+            Get-ChildItem -Path dist -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
             throw "gotrans.exe not found in dist"
           }
-          Copy-Item $exe.FullName dist\gotrans.exe
-          & $makensis "/DVERSION=$V" /DARCH=amd64 build/gotrans.nsi
+          $distExe = Join-Path (Get-Location) "dist\gotrans.exe"
+          Copy-Item -LiteralPath $exe.FullName -Destination $distExe -Force
+          Write-Host "copied $($exe.FullName) -> $distExe"
+
+          # 版本号去掉前缀 v；显式检查退出码，把 makensis 的真实报错暴露到日志。
+          $V = $env:APP_TAG -replace '^v', ''
+          $PSNativeCommandUseErrorActionPreference = $false
+          & $makensis "/DVERSION=$V" "/DARCH=amd64" "build/gotrans.nsi"
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
+
+          # 确认安装器已生成。
+          $setup = Get-ChildItem -Path dist -Filter '*_setup.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $setup) { throw "setup.exe was not produced by makensis" }
+          Write-Host "produced: $($setup.FullName)"
       - uses: actions/upload-artifact@v4
         with:
           name: dist-windows-amd64
