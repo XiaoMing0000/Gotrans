@@ -37,18 +37,31 @@ func GoogleAPIBase() string { return googleAPIBase.Load().(string) }
 // google 使用 Google Cloud Translation v2（需要 API Key）。
 // 文档：https://cloud.google.com/translate/docs/reference/rest/v2/translate
 type google struct {
-	client *http.Client
-	apiKey string
+	client  *http.Client
+	apiKey  string
+	name    string
+	baseURL string // 空值表示使用全局 googleAPIBase
 }
 
 func newGoogle(apiKey string) *google {
 	return &google{
 		client: &http.Client{Timeout: 15 * time.Second},
 		apiKey: strings.TrimSpace(apiKey),
+		name:   "Google",
 	}
 }
 
-func (g *google) Name() string { return "Google" }
+// newGoogleCustom 构造一个自定义的 Google 兼容引擎（独立名称、接口地址与 Key）。
+func newGoogleCustom(name, baseURL, apiKey string) *google {
+	return &google{
+		client:  &http.Client{Timeout: 15 * time.Second},
+		apiKey:  strings.TrimSpace(apiKey),
+		name:    strings.TrimSpace(name),
+		baseURL: strings.TrimSpace(baseURL),
+	}
+}
+
+func (g *google) Name() string { return g.name }
 
 func (g *google) Languages() []Language { return languages }
 
@@ -102,7 +115,11 @@ func (g *google) Translate(ctx context.Context, text string, from, to Language) 
 		return "", fmt.Errorf("构造请求失败: %w", err)
 	}
 
-	base := strings.TrimRight(googleAPIBase.Load().(string), "/")
+	base := g.baseURL
+	if base == "" {
+		base = googleAPIBase.Load().(string)
+	}
+	base = strings.TrimRight(base, "/")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("构造请求失败: %w", err)

@@ -13,7 +13,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -40,7 +39,7 @@ func Build(a fyne.App) fyne.Window {
 		providerName = os.Getenv("GOTRANS_PROVIDER")
 	}
 	cfg.Provider = providerName
-	translator.SetProvider(translator.New(providerName, cfg.GoogleAPIKey))
+	translator.SetProvider(providerFromConfig(&cfg))
 
 	// 字体透明度通过主题只作用于文字颜色；窗口透明度走 X11 整窗属性（见文件末尾）。
 	a.Settings().SetTheme(&fontOpacityTheme{
@@ -81,33 +80,51 @@ func Build(a fyne.App) fyne.Window {
 	selEnabled.Store(cfg.SelectionEnabled)
 	selSeq := &atomic.Uint64{}
 
-	// 划词翻译：原文显示在输入框下方（左侧），译文显示在输出框下方（右侧），
-	// 仿照主输入/输出框使用可编辑输入框，支持框选文本与右键菜单（复制/全选等）。
+	// 划词翻译：原文显示在输入框下方（左侧），译文显示在输出框下方（右侧）。
+	// 译文区使用与其它输入框一致的多行输入框，右键菜单附加「仅显示划词译文窗口」。
 	selSource := widget.NewMultiLineEntry()
 	selSource.SetPlaceHolder(selPlaceholder)
 	selSource.Wrapping = fyne.TextWrapWord
-	selResult := widget.NewMultiLineEntry()
-	selResult.Wrapping = fyne.TextWrapWord
-	selResult.TextStyle = fyne.TextStyle{Bold: true}
+
+	// 悬浮窗状态仅在 UI 线程读写（拖拽、右键菜单、翻译回调均运行于 UI 线程）。
+	var floatState *floatWindow
+	selResult := newSelectionResultEntry()
+
+	// setResult 将译文同步到主窗口划词译文区，并在悬浮窗打开时同步到悬浮窗。
+	setResult := func(text string) {
+		selResult.SetText(text)
+		if floatState != nil && floatState.text != nil {
+			floatState.text.SetText(text)
+		}
+	}
+
+	// openFloat 打开「仅显示划词译文窗口」：隐藏主窗口，弹出无边框悬浮窗。
+	openFloat := func() {
+		if floatState != nil {
+			floatState.win.RequestFocus()
+			return
+		}
+		floatState = newFloatWindow(a, w, selResult.Text, cfg.WindowOpacity, func() {
+			floatState = nil
+		})
+	}
+	selResult.SetExtra("仅显示划词译文窗口", openFloat)
 
 	if watcher, err := selection.New(); err != nil {
 		selSource.SetText("划词翻译不可用")
 		selResult.SetText(err.Error())
 	} else {
-		go watchSelection(watcher, selEnabled, selSeq, selSource, selResult)
+		go watchSelection(watcher, selEnabled, selSeq, selSource, setResult)
 	}
 
-	// 划词栏：显示原文时原文/译文左右并排；隐藏原文时译文全宽填充。
-	selBar := container.NewGridWithColumns(2, selSource, selResult)
+	// 划词栏：显示原文时原文/译文左右并排（分隔条可拖拽调整宽度）；隐藏原文时译文全宽填充。
+	selBar := container.NewHSplit(selSource, selResult)
+	selBar.SetOffset(cfg.SelectionSourceSplitOffset)
 	setSelectionBar := func(showSource bool) {
 		if showSource {
 			selSource.Show()
-			selBar.Objects = []fyne.CanvasObject{selSource, selResult}
-			selBar.Layout = layout.NewGridLayoutWithColumns(2)
 		} else {
 			selSource.Hide()
-			selBar.Objects = []fyne.CanvasObject{selResult}
-			selBar.Layout = layout.NewGridLayoutWithColumns(1)
 		}
 		selBar.Refresh()
 	}
@@ -120,12 +137,12 @@ func Build(a fyne.App) fyne.Window {
 	swapBtn := widget.NewButton("⇄", nil)
 	copyBtn := widget.NewButton("复制译文", nil)
 	clearInputBtn := widget.NewButton("清空输入", func() {
-		// 同时清空：主输入框、主译文、划词原文、划词译文。
+		// 同时清空：主输入框、主译文、划词原文、划词译文（含悬浮窗）。
 		srcEntry.SetText("")
 		dstEntry.SetText("")
 		selSeq.Add(1)
 		selSource.SetText("")
-		selResult.SetText("")
+		setResult("")
 	})
 	settingsBtn := widget.NewButton("设置", nil)
 
@@ -178,11 +195,13 @@ func Build(a fyne.App) fyne.Window {
 	}
 
 	top := container.NewGridWithColumns(3, srcSelect, swapBtn, dstSelect)
+	// 原文/译文区域：水平分隔条可拖拽调整两侧宽度。
+	mainSplit := container.NewHSplit(srcEntry, dstEntry)
+	mainSplit.SetOffset(cfg.MainSplitOffset)
 	// 主区域上下分割：上方为原文/译文输入输出框，下方为划词栏。
 	// 分隔条可拖拽调整划词栏高度；划词关闭时下方收起、上方全高度填充。
-	topArea := container.NewGridWithColumns(2, srcEntry, dstEntry)
-	middle := container.NewVSplit(topArea, selBar)
-	middle.SetOffset(0.8)
+	middle := container.NewVSplit(mainSplit, selBar)
+	middle.SetOffset(cfg.SelectionSplitOffset)
 	bottom := container.NewHBox(translateBtn, copyBtn, clearInputBtn, settingsBtn, status)
 
 	setSelectionEnabled = func(on bool) {
@@ -197,6 +216,14 @@ func Build(a fyne.App) fyne.Window {
 	setSelectionEnabled(cfg.SelectionEnabled)
 
 	w.SetContent(container.NewBorder(top, bottom, nil, nil, middle))
+
+	// 关闭窗口时保存三条分隔条位置，下次启动自动恢复。
+	w.SetOnClosed(func() {
+		cfg.MainSplitOffset = mainSplit.Offset
+		cfg.SelectionSplitOffset = middle.Offset
+		cfg.SelectionSourceSplitOffset = selBar.Offset
+		_ = cfg.Save()
+	})
 
 	// 窗口显示后按保存的配置应用窗口透明度（需等 X11 窗口出现）。
 	if cfg.WindowOpacity < 0.999 {
@@ -272,68 +299,252 @@ func showSettings(a fyne.App, parent fyne.Window, cfg *config.Config,
 		_ = cfg.Save()
 	}
 
-	// 翻译引擎选择：MyMemory / Google，切换后立即生效。
-	engineNames := []string{"MyMemory", "Google Translate"}
-	engineToProvider := map[string]string{"MyMemory": "mymemory", "Google Translate": "google"}
-	providerToEngine := map[string]string{"mymemory": "MyMemory", "google": "Google Translate"}
-
-	engineSelect := widget.NewSelect(engineNames, nil)
-	if display, ok := providerToEngine[cfg.Provider]; ok {
-		engineSelect.SetSelected(display)
-	} else {
-		engineSelect.SetSelected("MyMemory")
-	}
-	engineSelect.OnChanged = func(display string) {
-		cfg.Provider = engineToProvider[display]
-		translator.SetProvider(translator.New(cfg.Provider, cfg.GoogleAPIKey))
-		_ = cfg.Save()
+	// 翻译引擎选择：内置（MyMemory / Google）+ 自定义引擎 + 「自定义」添加项。
+	type engineOption struct {
+		provider string // mymemory / google / 自定义引擎名；空串表示「自定义」添加项
+		label    string
+		isCustom bool // 自定义引擎：行右侧显示 × 删除
+		isAdd    bool // 「自定义」添加项
 	}
 
-	// Google API Key：仅 Google 引擎使用，密码框隐藏、支持点击显示。
-	googleKeyEntry := widget.NewPasswordEntry()
-	googleKeyEntry.SetPlaceHolder("Google API Key")
-	googleKeyEntry.SetText(cfg.GoogleAPIKey)
-	googleKeyEntry.OnChanged = func(v string) {
-		v = strings.TrimSpace(v)
-		cfg.GoogleAPIKey = v
-		if cfg.Provider == "google" {
-			translator.SetProvider(translator.New("google", v))
+	addMode := false // 是否处于「添加自定义引擎」状态
+	engineFields := container.NewVBox()
+	engineBtn := widget.NewButton("", nil)
+
+	var (
+		enginePicker        *widget.PopUp
+		pickerContent       *fyne.Container
+		refreshEngineFields func()
+		refreshPickerLabel  func()
+		buildEngineRows     func() []fyne.CanvasObject
+		content             *fyne.Container
+	)
+
+	currentEngineLabel := func() string {
+		switch cfg.Provider {
+		case "google":
+			return "Google Translate"
+		case "mymemory", "":
+			return "MyMemory"
+		default:
+			for _, ce := range cfg.CustomEngines {
+				if ce.Name == cfg.Provider {
+					return ce.Name
+				}
+			}
+			return "MyMemory"
 		}
-		_ = cfg.Save()
 	}
 
-	// 接口地址（Google）：完整端点地址，留空恢复默认。
-	googleAPIEntry := widget.NewEntry()
-	googleAPIEntry.SetPlaceHolder(translator.DefaultGoogleAPIBase)
-	googleAPIEntry.SetText(translator.GoogleAPIBase())
-	googleAPIEntry.OnChanged = func(v string) {
-		v = strings.TrimSpace(v)
-		cfg.GoogleAPIBaseURL = v
-		translator.SetGoogleAPIBase(v)
-		_ = cfg.Save()
+	findCustomEngine := func(name string) int {
+		for i, ce := range cfg.CustomEngines {
+			if ce.Name == name {
+				return i
+			}
+		}
+		return -1
 	}
 
-	// 接口地址（MyMemory）：服务基地址（不含 /get），留空恢复默认。
-	apiEntry := widget.NewEntry()
-	apiEntry.SetPlaceHolder(translator.DefaultAPIBase)
-	apiEntry.SetText(translator.APIBase())
-	apiEntry.OnChanged = func(v string) {
-		v = strings.TrimSpace(v)
-		cfg.APIBaseURL = v
-		translator.SetAPIBase(v)
-		_ = cfg.Save()
+	applyProvider := func() {
+		translator.SetProvider(providerFromConfig(cfg))
 	}
 
-	content := container.NewVBox(
+	refreshEngineFields = func() {
+		var items []fyne.CanvasObject
+		switch {
+		case addMode:
+			nameEntry := widget.NewEntry()
+			nameEntry.SetPlaceHolder("输入自定义引擎名称")
+			addBtn := widget.NewButton("添加", func() {
+				n := strings.TrimSpace(nameEntry.Text)
+				if n == "" || n == "mymemory" || n == "google" {
+					return
+				}
+				if findCustomEngine(n) < 0 {
+					cfg.CustomEngines = append(cfg.CustomEngines, config.CustomEngine{Name: n})
+				}
+				addMode = false
+				cfg.Provider = n
+				applyProvider()
+				_ = cfg.Save()
+				refreshPickerLabel()
+				refreshEngineFields()
+			})
+			items = append(items,
+				widget.NewLabel("翻译引擎名称："),
+				nameEntry,
+				addBtn,
+			)
+
+		case cfg.Provider == "google":
+			keyEntry := widget.NewPasswordEntry()
+			keyEntry.SetPlaceHolder("Google API Key")
+			keyEntry.SetText(cfg.GoogleAPIKey)
+			keyEntry.OnChanged = func(v string) {
+				cfg.GoogleAPIKey = strings.TrimSpace(v)
+				applyProvider()
+				_ = cfg.Save()
+			}
+			apiEntry := widget.NewEntry()
+			apiEntry.SetPlaceHolder(translator.DefaultGoogleAPIBase)
+			apiEntry.SetText(translator.GoogleAPIBase())
+			apiEntry.OnChanged = func(v string) {
+				cfg.GoogleAPIBaseURL = strings.TrimSpace(v)
+				translator.SetGoogleAPIBase(cfg.GoogleAPIBaseURL)
+				applyProvider()
+				_ = cfg.Save()
+			}
+			items = append(items,
+				widget.NewLabel("接口地址（Google）："),
+				apiEntry,
+				widget.NewLabel("Google API Key："),
+				keyEntry,
+			)
+
+		case cfg.Provider == "mymemory" || cfg.Provider == "":
+			apiEntry := widget.NewEntry()
+			apiEntry.SetPlaceHolder(translator.DefaultAPIBase)
+			apiEntry.SetText(translator.APIBase())
+			apiEntry.OnChanged = func(v string) {
+				cfg.APIBaseURL = strings.TrimSpace(v)
+				translator.SetAPIBase(cfg.APIBaseURL)
+				_ = cfg.Save()
+			}
+			items = append(items,
+				widget.NewLabel("接口地址（MyMemory）："),
+				apiEntry,
+			)
+
+		default:
+			// 自定义引擎：展示并编辑其接口地址与 API Key。
+			keyEntry := widget.NewPasswordEntry()
+			keyEntry.SetPlaceHolder("API Key")
+			apiEntry := widget.NewEntry()
+			apiEntry.SetPlaceHolder(translator.DefaultGoogleAPIBase)
+			if i := findCustomEngine(cfg.Provider); i >= 0 {
+				keyEntry.SetText(cfg.CustomEngines[i].APIKey)
+				apiEntry.SetText(cfg.CustomEngines[i].BaseURL)
+			}
+			keyEntry.OnChanged = func(v string) {
+				if i := findCustomEngine(cfg.Provider); i >= 0 {
+					cfg.CustomEngines[i].APIKey = strings.TrimSpace(v)
+					applyProvider()
+					_ = cfg.Save()
+				}
+			}
+			apiEntry.OnChanged = func(v string) {
+				if i := findCustomEngine(cfg.Provider); i >= 0 {
+					cfg.CustomEngines[i].BaseURL = strings.TrimSpace(v)
+					applyProvider()
+					_ = cfg.Save()
+				}
+			}
+			items = append(items,
+				widget.NewLabel("接口地址："),
+				apiEntry,
+				widget.NewLabel("API Key："),
+				keyEntry,
+			)
+		}
+
+		engineFields.Objects = items
+		engineFields.Refresh()
+		if content != nil {
+			content.Refresh()
+		}
+	}
+
+	refreshPickerLabel = func() {
+		if addMode {
+			engineBtn.SetText("自定义…")
+		} else {
+			engineBtn.SetText(currentEngineLabel())
+		}
+	}
+
+	buildEngineRows = func() []fyne.CanvasObject {
+		opts := []engineOption{
+			{provider: "mymemory", label: "MyMemory"},
+			{provider: "google", label: "Google Translate"},
+		}
+		for _, ce := range cfg.CustomEngines {
+			opts = append(opts, engineOption{provider: ce.Name, label: ce.Name, isCustom: true})
+		}
+		opts = append(opts, engineOption{provider: "", label: "自定义", isAdd: true})
+
+		rows := make([]fyne.CanvasObject, 0, len(opts))
+		for _, opt := range opts {
+			opt := opt
+			selectBtn := widget.NewButton(opt.label, func() {
+				enginePicker.Hide()
+				addMode = opt.isAdd
+				if !opt.isAdd {
+					cfg.Provider = opt.provider
+					applyProvider()
+					_ = cfg.Save()
+				}
+				refreshPickerLabel()
+				refreshEngineFields()
+			})
+			selectBtn.Alignment = widget.ButtonAlignLeading
+			selectBtn.Importance = widget.LowImportance
+
+			if opt.isCustom {
+				delBtn := widget.NewButton("×", func() {
+					for i, ce := range cfg.CustomEngines {
+						if ce.Name == opt.provider {
+							cfg.CustomEngines = append(cfg.CustomEngines[:i], cfg.CustomEngines[i+1:]...)
+							break
+						}
+					}
+					// 删除的是当前引擎时，自动切回默认 MyMemory。
+					if cfg.Provider == opt.provider {
+						cfg.Provider = "mymemory"
+						applyProvider()
+					}
+					addMode = false
+					_ = cfg.Save()
+					refreshPickerLabel()
+					refreshEngineFields()
+					if enginePicker != nil && enginePicker.Visible() {
+						pickerContent.Objects = buildEngineRows()
+						pickerContent.Refresh()
+						enginePicker.Resize(fyne.NewSize(enginePicker.Size().Width, pickerContent.MinSize().Height))
+						enginePicker.Refresh()
+					}
+				})
+				delBtn.Importance = widget.LowImportance
+				rows = append(rows, container.NewBorder(nil, nil, nil, delBtn, selectBtn))
+			} else {
+				rows = append(rows, selectBtn)
+			}
+		}
+		return rows
+	}
+
+	engineBtn.OnTapped = func() {
+		if enginePicker != nil && enginePicker.Visible() {
+			enginePicker.Hide()
+			return
+		}
+		canvas := fyne.CurrentApp().Driver().CanvasForObject(engineBtn)
+		if canvas == nil {
+			return
+		}
+		pickerContent = container.NewVBox(buildEngineRows()...)
+		enginePicker = widget.NewPopUp(pickerContent, canvas)
+		enginePicker.ShowAtRelativePosition(fyne.NewPos(0, engineBtn.Size().Height), engineBtn)
+		enginePicker.Resize(fyne.NewSize(engineBtn.Size().Width, pickerContent.MinSize().Height))
+	}
+
+	refreshPickerLabel()
+	refreshEngineFields()
+
+	content = container.NewVBox(
 		widget.NewLabel("翻译引擎："),
-		engineSelect,
-		widget.NewLabel("Google API Key："),
-		googleKeyEntry,
-		widget.NewLabel("接口地址（Google）："),
-		googleAPIEntry,
-		widget.NewLabel("接口地址（MyMemory）："),
-		apiEntry,
-		widget.NewLabel("Google 接口地址为完整端点；MyMemory 接口地址为服务基地址（不含 /get 查询路径），留空均恢复默认。"),
+		engineBtn,
+		engineFields,
+		widget.NewLabel("Google/自定义接口地址为完整端点；MyMemory 接口地址为服务基地址（不含 /get），留空均恢复默认。"),
 		check,
 		selectionSub,
 		opacityLabel,
@@ -388,8 +599,9 @@ func applyOpacityWithRetry(opacity float64) {
 
 // watchSelection 轮询全局 PRIMARY 选区，变化时翻译并刷新面板。
 // 翻译方向按选区文本自动判定中/英（中文→英语，否则英语→中文）。
+// setResult 负责把译文写入主窗口划词译文区并同步到悬浮窗（若已打开）。
 func watchSelection(watcher *selection.Watcher,
-	enabled *atomic.Bool, seq *atomic.Uint64, selSource, selResult *widget.Entry) {
+	enabled *atomic.Bool, seq *atomic.Uint64, selSource *widget.Entry, setResult func(string)) {
 
 	var last string
 	for {
@@ -417,7 +629,7 @@ func watchSelection(watcher *selection.Watcher,
 
 		fyne.Do(func() {
 			selSource.SetText(truncate(text, 300))
-			selResult.SetText("翻译中…")
+			setResult("翻译中…")
 		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -430,9 +642,9 @@ func watchSelection(watcher *selection.Watcher,
 		}
 		fyne.Do(func() {
 			if err != nil {
-				selResult.SetText("翻译失败：" + err.Error())
+				setResult("翻译失败：" + err.Error())
 			} else {
-				selResult.SetText(res)
+				setResult(res)
 			}
 		})
 	}
@@ -468,4 +680,22 @@ func containsHan(s string) bool {
 		}
 	}
 	return false
+}
+
+// providerFromConfig 根据配置构造当前翻译引擎，含自定义引擎解析。
+// 未知或空 Provider 回退到默认的 MyMemory。
+func providerFromConfig(cfg *config.Config) translator.Provider {
+	switch cfg.Provider {
+	case "google":
+		return translator.New("google", cfg.GoogleAPIKey)
+	case "mymemory", "":
+		return translator.New("mymemory", "")
+	default:
+		for _, ce := range cfg.CustomEngines {
+			if ce.Name == cfg.Provider {
+				return translator.NewCustom(ce.Name, ce.BaseURL, ce.APIKey)
+			}
+		}
+		return translator.New("mymemory", "")
+	}
 }

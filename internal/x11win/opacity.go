@@ -18,36 +18,17 @@ func SetOpacityByTitle(title string, opacity float32) error {
 	}
 	defer conn.Close()
 
-	netClientList := intern(conn, "_NET_CLIENT_LIST")
-	netWMName := intern(conn, "_NET_WM_NAME")
 	netOpacity := intern(conn, "_NET_WM_WINDOW_OPACITY")
-	utf8 := intern(conn, "UTF8_STRING")
-	wmName := intern(conn, "WM_NAME")
-	str := intern(conn, "STRING")
 
-	setup := xproto.Setup(conn)
-	root := setup.DefaultScreen(conn).Root
-
-	reply, err := xproto.GetProperty(conn, false, root, netClientList, xproto.AtomWindow, 0, 1<<20).Reply()
-	if err != nil {
-		return err
+	win := findWindowByTitle(conn, title)
+	if win == 0 {
+		return fmt.Errorf("未找到标题为 %q 的窗口", title)
 	}
-
-	for _, win := range windowList(reply.Value) {
-		name := readText(conn, win, netWMName, utf8)
-		if name == "" {
-			name = readText(conn, win, wmName, str)
-		}
-		if name != title {
-			continue
-		}
-		v := opacityToCardinal(opacity)
-		xproto.ChangeProperty(conn, xproto.PropModeReplace, win, netOpacity,
-			xproto.AtomCardinal, 32, 1, u32Bytes(v))
-		conn.Sync()
-		return nil
-	}
-	return fmt.Errorf("未找到标题为 %q 的窗口", title)
+	v := opacityToCardinal(opacity)
+	xproto.ChangeProperty(conn, xproto.PropModeReplace, win, netOpacity,
+		xproto.AtomCardinal, 32, 1, u32Bytes(v))
+	conn.Sync()
+	return nil
 }
 
 func intern(conn *xgb.Conn, name string) xproto.Atom {

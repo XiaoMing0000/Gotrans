@@ -49,6 +49,11 @@ func New(provider, googleAPIKey string) Provider {
 	}
 }
 
+// NewCustom 构造一个自定义的 Google 兼容引擎：名称 + 接口地址 + Bearer 令牌。
+func NewCustom(name, baseURL, apiKey string) Provider {
+	return newGoogleCustom(name, baseURL, apiKey)
+}
+
 // Current 返回当前生效的引擎。
 func Current() Provider { return current.Load().(providerRef).p }
 
