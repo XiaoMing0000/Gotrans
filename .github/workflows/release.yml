@@ -21,7 +21,9 @@ env:
   # 用于 makensis / .app / .dmg 等手动打包步骤的版本号；tag 触发时为 vX.Y.Z。
   APP_TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
   # 非 tag 触发（手动 workflow_dispatch）时加 --snapshot，避免 goreleaser 因「未打 tag」直接失败。
-  SNAPSHOT: ${{ github.ref_type == 'tag' && '' || '--snapshot' }}
+  # 注意：GH 表达式里空字符串是 falsy，`cond && '' || x` 永远返回 x，所以要写成
+  # `cond && x || ''` 才能让 tag 触发时得到空串（即不加 --snapshot）。
+  SNAPSHOT: ${{ github.ref_type != 'tag' && '--snapshot' || '' }}
 
 jobs:
   build-linux-amd64:
