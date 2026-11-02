@@ -9,10 +9,13 @@
 FROM almalinux:9
 
 # X11/OpenGL 开发库（与 README 一致，glfw cgo 需要）+ 打包工具。
-# 注意：libxkbcommon-x11-devel、libXxf86vm-devel 只在 CRB(CodeReady Builder) 仓库，
-# 而 AlmaLinux 9 默认未启用 CRB，这里用 --enablerepo=crb 临时启用后一次性装齐。
+# 注意：
+#   - libxkbcommon-x11-devel、libXxf86vm-devel 只在 CRB(CodeReady Builder) 仓库，
+#     而 AlmaLinux 9 默认未启用 CRB，这里用 --enablerepo=crb 临时启用后一次性装齐。
+#   - 不装 curl：基础镜像已带 curl-minimal（足够 curl -fsSL 下载用），
+#     显式安装完整 curl 会与 curl-minimal 冲突。
 RUN dnf install -y --enablerepo=crb --setopt=install_weak_deps=False \
-    gcc git ca-certificates curl tar \
+    gcc git ca-certificates tar \
     pkgconf-pkg-config \
     libxkbcommon-devel libxkbcommon-x11-devel \
     libX11-devel libXcursor-devel libXrandr-devel libXinerama-devel \
